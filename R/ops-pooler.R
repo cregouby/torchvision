@@ -38,7 +38,7 @@
 #'     canonical_scale (int)
 #'     canonical_level (int)
 #'     eps (float)
-initLevelMapper = function(
+initLevelMapper <- function(
     k_min,
     k_max,
     canonical_scale = 224,
@@ -48,32 +48,32 @@ initLevelMapper = function(
 }
 
 LevelMapper <-  torch::nn_module(
-    "MultiScaleRoIAlign",
-    initialize = function(
-        self,
-        k_min,
-        k_max,
-        canonical_scale = 224,
-        canonical_level = 4,
-        eps = 1e-6,
-    ) {
-        self$k_min <- k_min
-        self$k_max <- k_max
-        self$s0 <- canonical_scale
-        self$lvl0 <- canonical_level
-        self$eps <- eps
+  "MultiScaleRoIAlign",
+  initialize = function(
+    self,
+    k_min,
+    k_max,
+    canonical_scale = 224,
+    canonical_level = 4,
+    eps = 1e-6
+  ) {
+    self$k_min <- k_min
+    self$k_max <- k_max
+    self$s0 <- canonical_scale
+    self$lvl0 <- canonical_level
+    self$eps <- eps
 
   },
   # Args:
   #     boxlists (list[BoxList])
   call = function(self, boxlists) {
-        # Compute level ids
-        s <- torch::torch_sqrt(torch::torch_cat(map(boxlists, ~box_area(.x))))
+    # Compute level ids
+    s <- torch::torch_sqrt(torch::torch_cat(map(boxlists, ~box_area(.x))))
 
-        # Eqn.(1) in FPN paper
-        target_lvls <- torch::torch_floor(self$lvl0 + torch::torch_log2(s / self$s0) + torch::torch_tensor(self$eps, dtype = s$dtype))
-        target_lvls <- torch::torch_clamp(target_lvls, min = self$k_min, max = self$k_max)
-        return((target_lvls$to(torch::torch_int64) - self$k_min)$to(torch::torch_int64))
+    # Eqn.(1) in FPN paper
+    target_lvls <- torch::torch_floor(self$lvl0 + torch::torch_log2(s / self$s0) + torch::torch_tensor(self$eps, dtype = s$dtype))
+    target_lvls <- torch::torch_clamp(target_lvls, min = self$k_min, max = self$k_max)
+    return((target_lvls$to(torch::torch_int64) - self$k_min)$to(torch::torch_int64))
   }
 )
 
@@ -117,8 +117,9 @@ setup_scales = function(features, image_shapes, canonical_scale, canonical_level
       canonical_scale = canonical_scale,
       canonical_level = canonical_level,
     )
-    return(scales, map_levels)
+    return(list(scales, map_levels))
 }
+
 #'
 #' @torch::torch_fx$wrap
 #' }
@@ -146,74 +147,77 @@ setup_scales = function(features, image_shapes, canonical_scale, canonical_level
 #'     mapper (Optional[LevelMapper]): If none, mapper will be automatically inferred. Default is.null(value).
 #' Returns:
 #'     result (Tensor)
-multiscale_roi_align <- function(
-    x_filtered,
-    boxes,
-    output_size,
-    sampling_ratio,
-    scales,
-    mapper) {
-    if (is.null(scales) || is.null(mapper)) {
-        rlang::abort(glue::glue("scales and mapper should not be NULL")
-    }
+multiscale_roi_align <- function(x_filtered,
+                                 boxes,
+                                 output_size,
+                                 sampling_ratio,
+                                 scales,
+                                 mapper) {
+  if (is.null(scales) || is.null(mapper)) {
+    rlang::abort(      glue::glue("scales and mapper should not be NULL"))
+  }
 
-    num_levels <- length(x_filtered)
-    rois <- convert_to_roi_format(boxes)
+  num_levels <- length(x_filtered)
+  rois <- convert_to_roi_format(boxes)
 
-    if (num_levels == 1) {
-        return(roi_align()
-            x_filtered[1],
-            rois,
-            output_size = output_size,
-            spatial_scale = scales[1],
-            sampling_ratio = sampling_ratio,
-        )
+  if (num_levels == 1) {
+    return(
+      roi_align(),
+      x_filtered[1],
+      rois,
+      output_size = output_size,
+      spatial_scale = scales[1],
+      sampling_ratio = sampling_ratio,
+    )
 
     levels <- mapper(boxes)
 
     num_rois <- length(rois)
     num_channels <- x_filtered[1]$shape[2]
 
-    dtype, device <- x_filtered[1]$dtype, x_filtered[1]$device
-    result <- torch::torch_zeros((num_rois,num_channels) + output_size,
-        dtype = dtype,
-        device = device
-    )
+    dtype <- x_filtered[1]$dtype
+    device <- x_filtered[1]$device
+    result <-
+      torch::torch_zeros(c(num_rois, num_channels) + output_size,
+                         dtype = dtype,
+                         device = device)
 
     tracing_results <- torch::torch_stack()
     # TODO need rework
-    for (level, (per_level_feature, scale) in enumerate(zip(x_filtered, scales))) {
-        idx_in_level <- torch::torch_where(levels == level)[0]
-        rois_per_level <- rois[idx_in_level]
+    # for (level, (per_level_feature, scale) in enumerate(zip(x_filtered, scales))) {
+    for (i in seq_len(x_filtered)) {
+      idx_in_level <- torch::torch_where(levels == level[[i]])[1]
+      rois_per_level <- rois[idx_in_level]
 
-        result_idx_in_level <- roi_align(
-            per_level_feature,
-            rois_per_level,
-            output_size = output_size,
-            spatial_scale = scale,
-            sampling_ratio = sampling_ratio,
-        )
+      result_idx_in_level <- roi_align(
+        scales[[i]][1],
+        rois_per_level,
+        output_size = output_size,
+        spatial_scale = scales[[i]][2],
+        sampling_ratio = sampling_ratio
+      )
 
-        if torchvision._is_tracing() {
-            tracing_results$append(result_idx_in_level$to(dtype))
-        } else {
-            # result and result_idx_in_level's dtypes are based on dtypes of different
-            # elements in x_filtered.  x_filtered contains tensors output by different
-            # layers.  When autocast is active, it may choose different dtypes for
-            # different layers' outputs.  Therefore, we defensively match result's dtype
-            # before copying elements from result_idx_in_level in the following op.
-            # We need to cast manually (can't rely on autocast to cast for us) because
-            # the op acts on result in-place, and autocast only affects out-of-place ops.
-            result[idx_in_level] <- result_idx_in_level$to(result$dtype)
-        }
+      # if (torchvision._is_tracing()) {
+      #   tracing_results$append(result_idx_in_level$to(dtype))
+      # } else {
+        # result and result_idx_in_level's dtypes are based on dtypes of different
+        # elements in x_filtered.  x_filtered contains tensors output by different
+        # layers.  When autocast is active, it may choose different dtypes for
+        # different layers' outputs.  Therefore, we defensively match result's dtype
+        # before copying elements from result_idx_in_level in the following op.
+        # We need to cast manually (can't rely on autocast to cast for us) because
+        # the op acts on result in-place, and autocast only affects out-of-place ops.
+        result[idx_in_level] <-
+          result_idx_in_level$to(result$dtype)
+      # }
     }
 
-    if torchvision._is_tracing() {
-        result <- _onnx_merge_levels(levels, tracing_results)
-    }
+    # if (torchvision._is_tracing()) {
+    #   result <- _onnx_merge_levels(levels, tracing_results)
+    # }
 
     return(result)
-}
+  }
 
 
 #' Multi-scale RoIAlign pooling, which is useful for detection with or without FPN.

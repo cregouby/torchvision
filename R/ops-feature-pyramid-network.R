@@ -59,9 +59,9 @@ ExtraFPNBlock <- torch::nn_module(
 #'     >>> output <- m(x)
 #'     >>> print(c((k, v$shape) for k, v in output$items()))
 #'     >>> # returns
-#'     >>>   [('feat0', torch::torch_Size([1, 5, 64, 64])),
+#'     >>>   list('feat0', torch::torch_Size([1, 5, 64, 64])),
 #'     >>>    ('feat2', torch::torch_Size([1, 5, 16, 16])),
-#'     >>>    ('feat3', torch::torch_Size([1, 5, 8, 8]))]
+#'     >>>    ('feat3', torch::torch_Size([1, 5, 8, 8]))
 feature_pyramid_network <- torch::nn_module(
   "feature_pyramid_network",
   # _version <- 2,
@@ -155,7 +155,7 @@ feature_pyramid_network <- torch::nn_module(
       idx <- idx + num_blocks
     }
     out <- x
-    for (i in seq_len(self$inner_blocks)){
+    for (i in seq_len(self$inner_blocks)) {
       if (i == idx) {
         out <- self$inner_blocks[[i]](x)
       }
@@ -191,25 +191,26 @@ feature_pyramid_network <- torch::nn_module(
   #         They are ordered from the highest resolution first.
   forward = function(self, x) {
     # unpack OrderedDict into two lists for easier handling
-    names <- list(x$keys())
-    x <- list(x$values())
+    names <- x$keys()
+    x <- x$values()
 
     last_inner <- self$get_result_from_inner_blocks(x[-1], -1)
-    results <- []
+    results <- list()
     results$append(self$get_result_from_layer_blocks(last_inner, -1))
 
-    for idx in range(length(x) - 2, -1, -1){
+    for (idx in seq(length(x) - 2, 0, -1)) {
       inner_lateral <- self$get_result_from_inner_blocks(x[idx], idx)
-      feat_shape <- inner_lateral$shape[-2:]
-      inner_top_down <- torch::nnf_interpolate(last_inner, size=feat_shape, mode="nearest")
+      feat_shape <- inner_lateral$shape[N-2:N]
+      inner_top_down <- torch::nnf_interpolate(last_inner, size = feat_shape, mode = "nearest")
       last_inner <- inner_lateral + inner_top_down
       results$insert(0, self$get_result_from_layer_blocks(last_inner, idx))
     }
-    if (self$!is.null(extra_blocks)) {
-      results, names <- self$extra_blocks(results, x, names)
+    if (!self$is.null(extra_blocks)) {
+      c(results, names) %<-% self$extra_blocks(results, x, names)
     }
     # make it back an OrderedDict
-    out <- OrderedDict(c((k, v) for k, v in zip(names, results)))
+    # TODO need rework
+    out <- c(names, results)
 
     return(out)
 
@@ -223,7 +224,7 @@ LastLevelMaxPool <- torch::nn_module(
         self,
         x,
         y,
-        names,
+        names
     ) {
         names$append("pool")
         # Use max pooling to simulate stride 2 subsampling
@@ -240,25 +241,25 @@ LastLevelP6P7 <- torch::nn_module(
 
         self$p6 <- torch::nn_conv2d(in_channels, out_channels, 3, 2, 1)
         self$p7 <- torch::nn_conv2d(out_channels, out_channels, 3, 2, 1)
-        for (module in [self$p6, self$p7]) {
+        for (module in c(self$p6, self$p7)) {
             torch::nn_init$kaiming_uniform_(module$weight, a=1)
             torch::nn_init$constant_(module$bias, 0)
         }
 
         self$use_P5 <- in_channels == out_channels
   },
-
-  forward = function(
-          self,
-          p,
-          c,
-          names,
-      ) {
-          p5, c5 <- p[-1], c[-1]
-          x <- p5 if self$use_P5 else c5
+  forward = function(self, p, c, names) {
+          p5 <- p[-1]
+          c5 <- c[-1]
+          if (self$use_P5) {
+            x <- p5
+          } else {
+            x <- c5
+          }
           p6 <- self$p6(x)
           p7 <- self$p7(torch::nnf_relu(p6))
-          p$extend([p6, p7])
-          names$extend(["p6", "p7"])
+          p$extend(c(p6, p7))
+          names$extend(c("p6", "p7"))
           return(p, names)
   }
+)
