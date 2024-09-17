@@ -243,7 +243,7 @@ draw_segmentation_masks  <-  function(image,
 #' @param image : Tensor of shape (3, H, W) and dtype uint8
 #' @param keypoints : Tensor of shape (N, K, 2) the K keypoints location for each of the N detected poses instance,
 #         in the format c(x, y).
-#' @param connectivity : Vector of pair of keypoints to be connected (currently unavailable)
+#' @param connectivity : Vector of pair of keypoints ids to be connected.
 #' @param colors : character vector containing the colors
 #'            of the boxes or single color for all boxes. The color can be represented as
 #'            strings e.g. "red" or "#FF00FF". By default, viridis colors are generated for keypoints
@@ -255,9 +255,15 @@ draw_segmentation_masks  <-  function(image,
 #' @examples
 #' if (torch::torch_is_installed()) {
 #' \dontrun{
+#' # keypoints only
 #' image <- torch::torch_randint(190, 255, size = c(3, 360, 360))$to(torch::torch_uint8())
 #' keypoints <- torch::torch_randint(low = 60, high = 300, size = c(4, 5, 2))
 #' keypoint_image <- draw_keypoints(image, keypoints)
+#' tensor_image_browse(keypoint_image)
+#'
+#' # keypoints with connectivity
+#' connectivity <- lapply(1:8, function(x) sample(1:20, 2))
+#' keypoint_image <- draw_keypoints(image, keypoints, connectivity)
 #' tensor_image_browse(keypoint_image)
 #' }
 #' }
@@ -282,27 +288,25 @@ draw_keypoints <- function(image,
     magick::image_read() %>%
     magick::image_draw()
 
-  for (pose in dim(img_kpts)[[1]]) {
+  for (pose in seq_along(dim(img_kpts)[[1]])) {
     graphics::points(img_kpts[pose,,1],img_kpts[pose,,2], pch = ".", col = colors, cex = radius)
 
   }
-  # TODO need R-isation and vectorisation
-    # for (kpt_id, kpt_inst in enumerate(img_kpts)) {
-    #     if (connectivity) {
-    #         for (connection in connectivity) {
-    #             start_pt_x <- kpt_inst[connection[0]][0]
-    #             start_pt_y <- kpt_inst[connection[0]][1]
-    #
-    #             end_pt_x <- kpt_inst[connection[1]][0]
-    #             end_pt_y <- kpt_inst[connection[1]][1]
-    #
-    #             draw$line(
-    #                 ((start_pt_x, start_pt_y), (end_pt_x, end_pt_y)),
-    #                 widt = width,
-    #             )
-    #         }
-    #     }
-    # }
+  for (i in seq_along(img_kpts)) {
+    kpt_inst <- img_kpts[[i]]  # Extract the i-th instance of keypoints
+
+    if (!is.null(connectivity)) {
+      purrr::map(connectivity, function(connection) {
+        start_pt_x <- kpt_inst[connection[1]][1]
+        start_pt_y <- kpt_inst[connection[1]][2]
+
+        end_pt_x <- kpt_inst[connection[2]][1]
+        end_pt_y <- kpt_inst[connection[2]][2]
+
+        graphics::segments(start_pt_x, start_pt_y, end_pt_x, end_pt_y, col = colors, lwd = width)
+      })
+    }
+  }
   grDevices::dev.off()
   draw_tt <-
     draw %>% magick::image_data(channels = "rgb") %>% as.integer %>% torch::torch_tensor(dtype = torch::torch_uint8())
